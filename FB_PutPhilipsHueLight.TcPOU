@@ -1,0 +1,85 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.12">
+  <POU Name="FB_PutPhilipsHueLight" Id="{291c0bdc-04ae-44cd-a687-1ec0dd379d02}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_PutPhilipsHueLight
+VAR_INPUT
+    bSend                : BOOL;
+    nPercentage			 : UINT(0..100);
+    nLightIndex          : UINT;
+END_VAR
+VAR_IN_OUT
+    fbClient             : FB_IotHttpClient;
+END_VAR
+VAR_OUTPUT
+    bBusy                : BOOL;
+    bError               : BOOL;
+    Q 					 : BOOL; // Falling edge of bBusy
+END_VAR
+VAR
+    fbRequest            : FB_IotHttpRequest;
+    fbRisingEdgeSend     : R_TRIG;
+
+    {attribute 'TcEncoding':='UTF-8'}
+    sContent             : STRING(2047);
+    {attribute 'TcEncoding':='UTF-8'}
+    sSend                : STRING(255);
+
+    sComposedUri         : STRING(255);
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[Q := FALSE;
+fbRisingEdgeSend(CLK:= bSend OR bBusy);
+
+IF NOT bBusy THEN
+	IF fbRisingEdgeSend.Q AND nLightIndex > 0 THEN
+		// Build JSON string manually (we could use the JSON PLC library but doing it manually is simple enough and avoids potential problems, e.g. with dynamic allocations)
+		sSend := '{"on":';
+		IF nPercentage > 0 THEN
+			sSend := CONCAT(sSend, 'true');
+		ELSE
+			sSend := CONCAT(sSend, 'false');
+		END_IF
+		IF nPercentage > 0 THEN
+			sSend := CONCAT(sSend, ',"bri":');
+			sSend := CONCAT(sSend, UINT_TO_STRING(REAL_TO_UINT(UINT_TO_REAL(nPercentage) / 100.0 * 254.0)));
+		END_IF
+		sSend := CONCAT(sSend, '}');
+	
+		sComposedUri := '/api/';
+		sComposedUri := CONCAT(sComposedUri, GVL.sHueApiKey);
+		sComposedUri := CONCAT(sComposedUri, '/lights/');
+		sComposedUri := CONCAT(sComposedUri, UINT_TO_STRING(nLightIndex));
+		sComposedUri := CONCAT(sComposedUri, '/state');
+
+		IF fbRequest.SendRequest(
+				sUri:=sComposedUri,
+				fbClient:=fbClient,
+				eRequestType:=ETcIotHttpRequestType.HTTP_PUT, 
+				pContent:=ADR(sSend),
+				nContentSize:=LEN2(ADR(sSend)),
+				0) THEN
+			bBusy:= TRUE;
+			bError:= FALSE;
+		ELSE
+			bError:=TRUE;
+			Q:= TRUE;
+		END_IF
+	END_IF
+ELSE
+    IF NOT fbRequest.bBusy THEN
+		bError:= TRUE;
+		IF NOT fbRequest.bError THEN                 
+			IF fbRequest.GetContent(pContent:= ADR(sContent), nContentSize:= SIZEOF(sContent), bSetNullTermination:= TRUE) THEN
+				IF fbRequest.nStatusCode >= 200 AND fbRequest.nStatusCode < 300 THEN
+					bError:= FALSE;
+				END_IF
+			END_IF
+		END_IF
+		bBusy:= FALSE;
+		Q:= TRUE;
+	END_IF
+END_IF]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

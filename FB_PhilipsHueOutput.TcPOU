@@ -1,0 +1,95 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.12">
+  <POU Name="FB_PhilipsHueOutput" Id="{5f4351de-c25c-4405-9732-bc7bafa6a0ab}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_PhilipsHueOutput
+VAR_INPUT
+	{ attribute 'TcHmiSymbol.AddSymbol' }
+	nPercentage                   : UINT(0..100);
+	nLightIndex                   : UINT(1..63); // Limit to valid range, prevent 0 and overflow
+END_VAR
+VAR_STAT
+	// One client for all philips hue outputs. HTTP clients are quite ressource intensive, so we share one instance.
+	fbHttpPhilipsHueClient        : FB_IotHttpClient := (sHostName:=GVL.sHueHostName, bKeepAlive:=FALSE, tConnectionTimeout:=T#5S);
+END_VAR
+VAR
+	fbPutPhilipsHueLight          : FB_PutPhilipsHueLight;
+	fbGetPhilipsHueLight          : FB_GetPhilipsHueLight;
+
+	nNewestKnownActivePercentage  : UINT(0..100);
+	bGotInitialValue              : BOOL;
+
+	fbGetIntervalTimer            : TON;
+	bGetIsDue                     : BOOL := TRUE;
+	fbPhaseOffsetTimer            : TON;
+	bPhaseOffsetDone              : BOOL;
+	bInitialized                  : BOOL;
+END_VAR
+VAR CONSTANT
+	DELAYED_START                 : TIME := T#10S;   // Better safe than sorry; maybe the PLC is still connecting to the network 
+	GET_INTERVAL                  : TIME := T#300S;  // Fetch current state; helps if light is turned on/off in the philips hue app, or experienced a power outage
+	MAX_EXPECTED_LIGHTS           : UINT := 63;      // Current Philips Hue bridge limitation
+	MAX_PHASE_OFFSET              : TIME := UDINT_TO_TIME(TIME_TO_UDINT(T#1S) * MAX_EXPECTED_LIGHTS); // Maximum offset to spread requests across most of the interval window
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// Initialize phase offset based on light index (only once)
+IF NOT bInitialized THEN
+	// Calculate evenly distributed phase offset based on light index
+	// This ensures lights are spread evenly across the time window regardless of total count
+	IF nLightIndex > 0 THEN
+		fbPhaseOffsetTimer(IN := TRUE, PT := DELAYED_START + UDINT_TO_TIME((nLightIndex - 1) * TIME_TO_UDINT(MAX_PHASE_OFFSET) / MAX_EXPECTED_LIGHTS));
+	END_IF
+	bInitialized := TRUE;
+END_IF
+
+// Handle phase offset - wait for the initial randomized delay before starting regular polling
+IF NOT bPhaseOffsetDone THEN
+	fbPhaseOffsetTimer();
+	IF fbPhaseOffsetTimer.Q THEN
+		bPhaseOffsetDone := TRUE;
+		fbPhaseOffsetTimer(IN := FALSE); // Reset the phase offset timer
+	END_IF
+END_IF
+
+IF bPhaseOffsetDone THEN
+	fbGetIntervalTimer(IN := NOT fbGetIntervalTimer.Q, PT:=GET_INTERVAL);
+	IF fbGetIntervalTimer.Q THEN
+		bGetIsDue := TRUE;
+	END_IF
+
+	// PUT
+	IF fbHttpPhilipsHueClient.bConfigured THEN
+		fbPutPhilipsHueLight(fbClient:=fbHttpPhilipsHueClient, nLightIndex:=nLightIndex);
+		IF fbPutPhilipsHueLight.Q THEN
+			IF fbPutPhilipsHueLight.bError THEN
+				// Reset after failed put
+				nPercentage := nNewestKnownActivePercentage;
+				fbPutPhilipsHueLight.nPercentage := nNewestKnownActivePercentage;
+			ELSE
+				nNewestKnownActivePercentage := fbPutPhilipsHueLight.nPercentage; // Adopt new value after successful PUT
+			END_IF
+		END_IF
+		fbPutPhilipsHueLight.bSend := (fbPutPhilipsHueLight.nPercentage <> nNewestKnownActivePercentage AND NOT fbGetPhilipsHueLight.bBusy AND NOT bGetIsDue);
+		IF NOT fbPutPhilipsHueLight.bBusy THEN
+			fbPutPhilipsHueLight.nPercentage := nPercentage;
+		END_IF
+
+		// GET
+	    fbGetPhilipsHueLight(fbClient:=fbHttpPhilipsHueClient, nLightIndex:=nLightIndex);
+		IF fbGetPhilipsHueLight.Q THEN
+			IF NOT fbGetPhilipsHueLight.bError THEN
+				// Adopt percentage we got via the GET request
+				nNewestKnownActivePercentage := fbGetPhilipsHueLight.nPercentage; 
+				nPercentage := fbGetPhilipsHueLight.nPercentage;
+				bGotInitialValue := TRUE;
+			END_IF
+			bGetIsDue := FALSE;
+		END_IF
+		fbGetPhilipsHueLight.bSend := (bGetIsDue AND NOT fbPutPhilipsHueLight.bBusy);
+	END_IF
+	fbHttpPhilipsHueClient.Execute();
+END_IF
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>
