@@ -1,7 +1,8 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4026.12">
   <POU Name="FB_PutPhilipsHueLight" Id="{291c0bdc-04ae-44cd-a687-1ec0dd379d02}" SpecialFunc="None">
-    <Declaration><![CDATA[FUNCTION_BLOCK FB_PutPhilipsHueLight
+    <Declaration><![CDATA[{ attribute 'TcHmiSymbol.ReadOnly' }
+FUNCTION_BLOCK FB_PutPhilipsHueLight
 VAR_INPUT
     bSend                : BOOL;
     nPercentage			 : UINT(0..100);

@@ -9,6 +9,7 @@ VAR_INPUT
 END_VAR
 VAR_STAT
 	// One client for all philips hue outputs. HTTP clients are quite ressource intensive, so we share one instance.
+	{ attribute 'TcHmiSymbol.ReadOnly' }
 	fbHttpPhilipsHueClient        : FB_IotHttpClient := (sHostName:=GVL.sHueHostName, bKeepAlive:=FALSE, tConnectionTimeout:=T#5S);
 END_VAR
 VAR
