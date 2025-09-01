@@ -18,6 +18,8 @@ VAR
 
 	nNewestKnownActivePercentage  : UINT(0..100);
 	bGotInitialValue              : BOOL;
+	
+	bDisconnectingAfterError      : BOOL;
 
 	fbGetIntervalTimer            : TON;
 	bGetIsDue                     : BOOL := TRUE;
@@ -87,6 +89,19 @@ IF bPhaseOffsetDone THEN
 			bGetIsDue := FALSE;
 		END_IF
 		fbGetPhilipsHueLight.bSend := (bGetIsDue AND NOT fbPutPhilipsHueLight.bBusy);
+	END_IF
+
+	IF fbHttpPhilipsHueClient.bError THEN
+		bDisconnectingAfterError := TRUE;
+		fbHttpPhilipsHueClient.Disconnect();
+	ELSIF bDisconnectingAfterError THEN
+		bGetIsDue := FALSE;  // Connecting the client failed, don't retry immediately
+
+		// Reset after failed put
+		nPercentage := nNewestKnownActivePercentage;
+		fbPutPhilipsHueLight.nPercentage := nNewestKnownActivePercentage;
+	ELSE
+		fbHttpPhilipsHueClient.Execute();
 	END_IF
 	fbHttpPhilipsHueClient.Execute();
 END_IF
